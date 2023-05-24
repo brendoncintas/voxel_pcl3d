@@ -12,13 +12,13 @@ find_package(pcl_ros REQUIRED)
 include_directories(include)
 
 # Add executable
-add_executable(voxel_node src/pcl_voxel.cpp)
+add_executable(pcl_voxel src/pcl_voxel.cpp)
 
 # Link dependencies
-ament_target_dependencies(voxel_node rclcpp sensor_msgs nav_msgs pcl_ros)
+ament_target_dependencies(pcl_voxel rclcpp sensor_msgs nav_msgs pcl_ros)
 
 # Install executables
-install(TARGETS voxel_node
+install(TARGETS pcl_voxel
         DESTINATION lib/${PROJECT_NAME})
 
 # Install launch files
