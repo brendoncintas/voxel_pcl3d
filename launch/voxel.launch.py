@@ -14,6 +14,7 @@ def generate_launch_description():
         output='screen',
         remappings=[
             ('points', '/velodyne_points'),
+            ('scan', '/voxel_scan')
         ]
     )
 

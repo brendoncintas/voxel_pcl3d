@@ -5,16 +5,21 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/voxel_grid.h>
 #include <cmath>
+#include <pcl/filters/statistical_outlier_removal.h>
+
 
 class PointCloudVoxelizerNode : public rclcpp::Node
 {
 public:
-  PointCloudVoxelizerNode() : Node("voxel_node")
+  PointCloudVoxelizerNode() : Node("point_cloud_voxelizer")
   {
     pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/points", 10, std::bind(&PointCloudVoxelizerNode::pointcloudCallback, this, std::placeholders::_1));
+      "/points", 10, std::bind(&PointCloudVoxelizerNode::pointcloudCallback, this, std::placeholders::_1));
 
     laserscan_pub_ = this->create_publisher<sensor_msgs::msg::LaserScan>("/voxel_scan", 10);
+
+    // Set the floor threshold
+    floor_threshold_ = -0.2;  // Adjust this value based on your environment
   }
 
 private:
@@ -22,6 +27,13 @@ private:
   {
     pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *pcl_cloud);
+
+    // Apply statistical outlier removal
+    pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
+    sor.setInputCloud(pcl_cloud);
+    sor.setMeanK(50);    // Number of neighbors to use for mean distance estimation
+    sor.setStddevMulThresh(1.0);   // Standard deviation threshold
+    sor.filter(*pcl_cloud);
 
     pcl::VoxelGrid<pcl::PointXYZ> voxel_grid;
     voxel_grid.setInputCloud(pcl_cloud);
@@ -54,6 +66,12 @@ private:
     // Convert 3D point cloud to laser scan
     for (const auto& point : downsampled_cloud->points)
     {
+      if (point.z <= floor_threshold_)
+      {
+        // Skip points below the floor threshold
+        continue;
+      }
+
       double angle = std::atan2(point.y, point.x);
       double range = std::sqrt(std::pow(point.x, 2) + std::pow(point.y, 2) + std::pow(point.z, 2));
 
@@ -76,6 +94,8 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr laserscan_pub_;
+
+  double floor_threshold_;
 };
 
 int main(int argc, char **argv)
