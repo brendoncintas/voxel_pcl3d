@@ -1,102 +1,87 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
-#include <pcl_conversions/pcl_conversions.h>
-#include <unordered_set>
-#include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/filters/voxel_grid.h>
+#include <cmath>
 
-class PointCloudToLaserScan : public rclcpp::Node
+class PointCloudVoxelizerNode : public rclcpp::Node
 {
 public:
-  PointCloudToLaserScan()
-    : Node("voxel_node")
+  PointCloudVoxelizerNode() : Node("voxel_node")
   {
-    subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      "points",
-      rclcpp::QoS(10),
-      std::bind(&PointCloudToLaserScan::pointCloudCallback, this, std::placeholders::_1)
-    );
-    publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>(
-      "voxel_scan",
-      rclcpp::QoS(10)
-    );
+    pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/points", 10, std::bind(&PointCloudVoxelizerNode::pointcloudCallback, this, std::placeholders::_1));
+
+    laserscan_pub_ = this->create_publisher<sensor_msgs::msg::LaserScan>("/voxel_scan", 10);
   }
 
 private:
-  void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  void pointcloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
-    // Convert PointCloud2 message to PCL point cloud
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::fromROSMsg(*msg, *cloud);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::fromROSMsg(*msg, *pcl_cloud);
 
-    // Voxelization parameters
-    double voxel_size = 0.1;  // units are in meters
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_grid;
+    voxel_grid.setInputCloud(pcl_cloud);
+    voxel_grid.setLeafSize(0.1, 0.1, 0.1); // Set the voxel grid size
 
-    // Voxelization process
-    std::unordered_set<std::pair<int, int>, PairHash> voxel_grid;
-    for (const auto& point : cloud->points)
+    pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    voxel_grid.filter(*downsampled_cloud);
+
+    sensor_msgs::msg::LaserScan laserscan;
+    laserscan.header = msg->header;
+
+    // Define the laser scan parameters
+    double angle_min = -M_PI / 4; // Minimum angle of the laser scan
+    double angle_max = M_PI / 4;  // Maximum angle of the laser scan
+    double angle_increment = (angle_max - angle_min) / downsampled_cloud->width; // Angle increment between each beam
+    double range_min = 0.0;       // Minimum range
+    double range_max = 100.0;     // Maximum range
+
+    laserscan.angle_min = angle_min;
+    laserscan.angle_max = angle_max;
+    laserscan.angle_increment = angle_increment;
+    laserscan.time_increment = 0.0; // Time increment between each beam (not used)
+    laserscan.scan_time = 0.0;      // Total scan time (not used)
+    laserscan.range_min = range_min;
+    laserscan.range_max = range_max;
+
+    size_t num_beams = std::round((angle_max - angle_min) / angle_increment) + 1;
+    laserscan.ranges.resize(num_beams, range_max + 1.0); // Initialize ranges to be out of range
+
+    // Convert 3D point cloud to laser scan
+    for (const auto& point : downsampled_cloud->points)
     {
-      int voxel_x = static_cast<int>(point.x / voxel_size);
-      int voxel_y = static_cast<int>(point.y / voxel_size);
-      voxel_grid.insert(std::make_pair(voxel_x, voxel_y));
-    }
+      double angle = std::atan2(point.y, point.x);
+      double range = std::sqrt(std::pow(point.x, 2) + std::pow(point.y, 2) + std::pow(point.z, 2));
 
-    // Create LaserScan message
-    sensor_msgs::msg::LaserScan::SharedPtr laser_scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    laser_scan->header = msg->header;
-    laser_scan->angle_min = -M_PI / 2;
-    laser_scan->angle_max = M_PI / 2;
-    laser_scan->angle_increment = M_PI / 180;
-    laser_scan->range_min = 0.0;
-    laser_scan->range_max = std::numeric_limits<float>::infinity();
-    laser_scan->ranges.clear();
-
-    double max_range = 10.0;
-    for (double angle = laser_scan->angle_min; angle <= laser_scan->angle_max; angle += laser_scan->angle_increment)
-    {
-      for (double distance = 0; distance < max_range; distance += voxel_size)
+      // Check if the point falls within the laser scan field of view
+      if (angle >= angle_min && angle <= angle_max)
       {
-        double x = distance * std::cos(angle);
-        double y = distance * std::sin(angle);
-        int voxel_x = static_cast<int>(x / voxel_size);
-        int voxel_y = static_cast<int>(y / voxel_size);
-        if (voxel_grid.count(std::make_pair(voxel_x, voxel_y)))
+        // Calculate the corresponding beam index
+        size_t beam_index = std::round((angle - angle_min) / angle_increment);
+
+        // Update the range for the closest point in that beam
+        if (range < laserscan.ranges[beam_index])
         {
-          laser_scan->ranges.push_back(distance);
-          break;
-        }
-        else if (distance + voxel_size >= max_range)
-        {
-          laser_scan->ranges.push_back(laser_scan->range_max);
+          laserscan.ranges[beam_index] = range;
         }
       }
     }
 
-    // Publish LaserScan message
-    publisher_->publish(*laser_scan);
+    laserscan_pub_->publish(laserscan);
   }
 
-  struct PairHash
-  {
-    template <class T1, class T2>
-    std::size_t operator()(const std::pair<T1, T2>& pair) const
-    {
-      std::size_t seed = 0;
-      seed ^= std::hash<T1>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-      seed ^= std::hash<T2>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-      return seed;
-    }
-  };
-
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
-  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
+  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr laserscan_pub_;
 };
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<PointCloudToLaserScan>());
+  rclcpp::spin(std::make_shared<PointCloudVoxelizerNode>());
   rclcpp::shutdown();
   return 0;
 }
