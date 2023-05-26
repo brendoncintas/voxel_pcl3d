@@ -4,9 +4,9 @@
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/voxel_grid.h>
-#include <cmath>
+#include <pcl/filters/passthrough.h>  // Include the PassThrough filter
 #include <pcl/filters/statistical_outlier_removal.h>
-
+#include <cmath>
 
 class PointCloudVoxelizerNode : public rclcpp::Node
 {
@@ -28,15 +28,23 @@ private:
     pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *pcl_cloud);
 
+    // Preprocess the point cloud data
+    pcl::PassThrough<pcl::PointXYZ> pass;
+    pass.setInputCloud(pcl_cloud);
+    pass.setFilterFieldName("z");
+    pass.setFilterLimits(0.0, 5.0);  // Adjust the limits according to your requirements
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pass.filter(*filtered_cloud);
+
     // Apply statistical outlier removal
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
-    sor.setInputCloud(pcl_cloud);
+    sor.setInputCloud(filtered_cloud);
     sor.setMeanK(50);    // Number of neighbors to use for mean distance estimation
     sor.setStddevMulThresh(1.0);   // Standard deviation threshold
-    sor.filter(*pcl_cloud);
+    sor.filter(*filtered_cloud);
 
     pcl::VoxelGrid<pcl::PointXYZ> voxel_grid;
-    voxel_grid.setInputCloud(pcl_cloud);
+    voxel_grid.setInputCloud(filtered_cloud);
     voxel_grid.setLeafSize(0.1, 0.1, 0.1); // Set the voxel grid size
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -98,7 +106,7 @@ private:
   double floor_threshold_;
 };
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
   rclcpp::spin(std::make_shared<PointCloudVoxelizerNode>());

@@ -13,7 +13,7 @@ def generate_launch_description():
         name='voxel_node',
         output='screen',
         remappings=[
-            ('points', '/velodyne_points'),
+            ('points', '/points'),
             ('scan', '/voxel_scan')
         ]
     )
